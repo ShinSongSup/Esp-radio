@@ -125,7 +125,7 @@
 // Define the version number, also used for webserver as Last-Modified header:
 #define VERSION "Wed, 04 May 2017 10:00:00 GMT"
 // TFT.  Define USETFT if required.
-#define USETFT
+//#define USETFT
 #include <ESP8266WiFi.h>
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -170,17 +170,61 @@ extern "C"
 #define YELLOW  RED | GREEN
 #define WHITE   BLUE | RED | GREEN
 // Digital I/O used
-// Pins for VS1053 module
+// Option 1: Comment out both.
+// Option 2: Uncomment HUZZAH but comment out FEATHER
+// Option 3: Comment out HUZZAH but uncomment FEATHER
+#define HUZZAH
+//#define FEATHER
+#if defined(HUZZAH)
+// Adafruit Huzzah ESP8266(not feather) with Adafruit VS1053 breakout board
+/*
+ * Adafruit VS1053         ESP8266     Audio   Description
+ * Breakout board                      jack
+ * ----------------        --------    ------  ----------------------
+ * VCC                     V+ (5V USB)
+ * GND                     GND
+ * CLK                     #14                 SPI clock
+ * MISO                    #12                 SPI MISO
+ * MOSI                    #13                 SPI MOSI
+ * CS                      #5                  SPI CS VS103
+ * RST                     RST                 Reset
+ * XDCS                    #16                 Data/Command select
+ * SDCS                    #15                 SPI CS uSD card slot
+ * DREQ                    #4                  VS1053 interrupt
+ * AGND                                Center
+ * LOUT                                Left    Left audio channel
+ * ROUT                                Right   Right audio channel
+ */
 #define VS1053_CS     5
 #define VS1053_DCS    16
 #define VS1053_DREQ   4
+#define SDCARDCS      15
+#elif defined(FEATHER)
+// Adafruit ESP8266 Feather with Adafruit VS1053 FeatherWing
+#define VS1053_CS     16
+#define VS1053_DCS    15
+#define VS1053_DREQ   0
+#define SDCARDCS      2
+#else
+#define VS1053_CS     5
+#define VS1053_DCS    16
+#define VS1053_DREQ   4
+#endif
+
 // Pins CS and DC for TFT module (if used, see definition of "USETFT")
 #define TFT_CS 15
 #define TFT_DC 2
 // Control button (GPIO) for controlling station
+//#define USEBUTTONS
+#if defined( USEBUTTONS )
 #define BUTTON1 2
 #define BUTTON2 0
 #define BUTTON3 15
+#else
+#define BUTTON1 -1
+#define BUTTON2 -1
+#define BUTTON3 -1
+#endif
 // Ringbuffer for smooth playing. 20000 bytes is 160 Kbits, about 1.5 seconds at 128kb bitrate.
 #define RINGBFSIZ 20000
 // Debug buffer size
@@ -559,6 +603,7 @@ void VS1053::begin()
   digitalWrite ( dcs_pin,   HIGH ) ;                    // Start HIGH for SCI en SDI
   digitalWrite ( cs_pin,    HIGH ) ;
   delay ( 100 ) ;
+#if !defined(HUZZAH) && !defined(FEATHER)
   dbgprint ( "Reset VS1053..." ) ;
   digitalWrite ( dcs_pin,   LOW ) ;                     // Low & Low will bring reset pin low
   digitalWrite ( cs_pin,    LOW ) ;
@@ -567,6 +612,7 @@ void VS1053::begin()
   digitalWrite ( dcs_pin,   HIGH ) ;                    // Back to normal again
   digitalWrite ( cs_pin,    HIGH ) ;
   delay ( 500 ) ;
+#endif
   // Init SPI in slow mode ( 0.2 MHz )
   VS1053_SPI = SPISettings ( 200000, MSBFIRST, SPI_MODE0 ) ;
   //printDetails ( "Right after reset/startup" ) ;
@@ -1025,6 +1071,7 @@ void timer100()
     timer10sec() ;                                // Yes, do 10 second procedure
     count10sec = 0 ;                              // Reset count
   }
+#if defined(USEBUTTONS)
   else
   {
     newval = digitalRead ( BUTTON2 ) ;            // Test if below certain level
@@ -1087,6 +1134,7 @@ void timer100()
       }
     }
   }
+#endif
 }
 
 
@@ -1672,6 +1720,11 @@ void setup()
 
   Serial.begin ( 115200 ) ;                            // For debug
   Serial.println() ;
+#if defined(SDCARDCS) && (SDCARDCS >= 0)
+  // Deselect SDCARD
+  pinMode(SDCARDCS, OUTPUT);
+  digitalWrite(SDCARDCS, HIGH);
+#endif
   system_update_cpu_freq ( 160 ) ;                     // Set to 80/160 MHz
   ringbuf = (uint8_t *) malloc ( RINGBFSIZ ) ;         // Create ring buffer
   xml.init ( xmlbuffer, sizeof(xmlbuffer),             // Initilize XML stream.
@@ -1710,7 +1763,9 @@ void setup()
   dbgprint ( "Sketch size %d, free size %d",
              ESP.getSketchSize(),
              ESP.getFreeSketchSpace() ) ;
+#if defined(USEBUTTONS)
   pinMode ( BUTTON2, INPUT_PULLUP ) ;                  // Input for control button 2
+#endif
   vs1053player.begin() ;                               // Initialize VS1053 player
 # if defined ( USETFT )
   tft.begin() ;                                        // Init TFT interface
@@ -1723,8 +1778,10 @@ void setup()
   tft.println ( "Version:" ) ;
   tft.println ( VERSION ) ;
 #else
+#if defined(USEBUTTONS)
   pinMode ( BUTTON1, INPUT_PULLUP ) ;                  // Input for control button 1
   pinMode ( BUTTON3, INPUT_PULLUP ) ;                  // Input for control button 3
+#endif
 #endif
   delay(10);
   analogrest = ( analogRead ( A0 ) + asw1 ) / 2  ;     // Assumed inactive analog input
