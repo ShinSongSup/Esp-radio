@@ -1718,8 +1718,10 @@ void setup()
   File        f ;                                      // Filehandle
   String      filename ;                               // Name of file found in SPIFFS
 
+#if !defined(FEATHER)
   Serial.begin ( 115200 ) ;                            // For debug
   Serial.println() ;
+#endif
 #if defined(SDCARDCS) && (SDCARDCS >= 0)
   // Deselect SDCARD
   pinMode(SDCARDCS, OUTPUT);
