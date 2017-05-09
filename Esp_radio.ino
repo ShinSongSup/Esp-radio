@@ -126,6 +126,12 @@
 #define VERSION "Wed, 04 May 2017 10:00:00 GMT"
 // TFT.  Define USETFT if required.
 //#define USETFT
+// Feather OLED.  Define USEFEATHEROLED if required.
+// Buttons A and C conflict with the VS1053 card so cannot be used.
+// Button_A is on GPIO#0 but VS1053 DREQ uses this pin.
+// Button_C is on GPIO#2 but SDCARDCS uses this pin.
+//#define USEFEATHEROLED
+
 #include <ESP8266WiFi.h>
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncWebServer.h>
@@ -134,6 +140,25 @@
 #if defined ( USETFT )
 #include <Adafruit_GFX.h>
 #include <TFT_ILI9163C.h>
+#elif defined ( USEFEATHEROLED )
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
+#if defined ( USEBUTTONS )
+#if defined ( ESP8266 )
+  #define BUTTON_A 0
+  #define BUTTON_B 16
+  #define BUTTON_C 2
+  #define LED      0
+#elif defined ( ESP32 )
+  #define BUTTON_A 15
+  #define BUTTON_B 32
+  #define BUTTON_C 14
+  #define LED      13
+#endif
+#define VOLUME_UP   BUTTON_A
+#define PRESET_NEXT BUTTON_B
+#define VOLUME_DOWN BUTTON_C
+#endif
 #endif
 #include <Ticker.h>
 #include <stdio.h>
@@ -159,6 +184,15 @@ extern "C"
 #define asw1    2000
 #define asw2    2000
 #define asw3    2000
+#if defined ( USEFEATHEROLED )
+// OLED is black and white so every color except black is white
+#define BLUE    WHITE
+#define RED     WHITE
+#define GREEN   WHITE
+#define CYAN    WHITE
+#define MAGENTA WHITE
+#define YELLOW  WHITE
+#else
 //
 // Color definitions for the TFT screen (if used)
 #define BLACK   0x0000
@@ -169,12 +203,13 @@ extern "C"
 #define MAGENTA RED | BLUE
 #define YELLOW  RED | GREEN
 #define WHITE   BLUE | RED | GREEN
+#endif
 // Digital I/O used
 // Option 1: Comment out both.
 // Option 2: Uncomment HUZZAH but comment out FEATHER
 // Option 3: Comment out HUZZAH but uncomment FEATHER
-#define HUZZAH
-//#define FEATHER
+//#define HUZZAH
+#define FEATHER
 #if defined(HUZZAH)
 // Adafruit Huzzah ESP8266(not feather) with Adafruit VS1053 breakout board
 /*
@@ -242,6 +277,9 @@ extern "C"
 // Forward declaration of various functions                                                *
 //******************************************************************************************
 void   displayinfo ( const char* str, uint16_t pos, uint16_t height, uint16_t color ) ;
+void   displayTitle ( const char* str, uint16_t color ) ;
+void   displayStation ( const char* str, uint16_t color ) ;
+void   displaySong ( const char* str, uint16_t color ) ;
 void   showstreamtitle ( const char* ml, bool full = false ) ;
 void   handlebyte ( uint8_t b, bool force = false ) ;
 void   handlebyte_ch ( uint8_t b, bool force = false ) ;
@@ -296,7 +334,9 @@ AsyncMqttClient  mqttclient ;                              // Client for MQTT su
 IPAddress        mqtt_server_IP ;                          // IP address of MQTT broker
 char             cmd[130] ;                                // Command from MQTT or Serial
 #if defined ( USETFT )
-TFT_ILI9163C     tft = TFT_ILI9163C ( TFT_CS, TFT_DC ) ;
+TFT_ILI9163C     display = TFT_ILI9163C ( TFT_CS, TFT_DC ) ;
+#elif defined ( USEFEATHEROLED )
+Adafruit_SSD1306 display = Adafruit_SSD1306();
 #endif
 Ticker           tckr ;                                    // For timing 100 msec
 TinyXML          xml;                                      // For XML parser.
@@ -1146,13 +1186,71 @@ void timer100()
 void displayinfo ( const char* str, uint16_t pos, uint16_t height, uint16_t color )
 {
 #if defined ( USETFT )
-  tft.fillRect ( 0, pos, 160, height, BLACK ) ; // Clear the space for new info
-  tft.setTextColor ( color ) ;                  // Set the requested color
-  tft.setCursor ( 0, pos ) ;                    // Prepare to show the info
-  tft.println ( str ) ;                         // Show the string
+  display.fillRect ( 0, pos, 160, height, BLACK ) ; // Clear the space for new info
+  display.setTextColor ( color ) ;                  // Set the requested color
+  display.setCursor ( 0, pos ) ;                    // Prepare to show the info
+  display.println ( str ) ;                         // Show the string
+#elif defined ( USEFEATHEROLED )
+  display.fillRect ( 0, pos, 128, height, BLACK ) ; // Clear the space for new info
+  display.setTextColor ( color ) ;                  // Set the requested color
+  display.setCursor ( 0, pos ) ;                    // Prepare to show the info
+  display.println ( str ) ;                         // Show the string
+  display.display();
 #endif
 }
 
+void displayTitle ( const char* str, uint16_t color )
+{
+#if defined ( USETFT )
+  displayinfo ( str, 0, 20, color ) ;
+#elif defined ( USEFEATHEROLED )
+  // Use line 0
+  // Skip leading blanks because the OLED is not as wide as the TFT
+  while (*str == ' ') str++;
+  displayinfo ( str, 0*8, 8, color ) ;
+#endif
+}
+
+void displaySong ( const char* str, uint16_t color )
+{
+#if defined ( USETFT )
+  displayinfo ( str, 20, 40, color ) ;
+#elif defined ( USEFEATHEROLED )
+  // Use lines 1 and 2
+  // Change newlines to slashes. Squeeze more info on the smaller
+  // OLED screen
+  // Skip leading blanks because the OLED is not as wide as the TFT
+  while (*str == ' ') str++;
+  char *copy = (char *)malloc(strlen(str)+1);
+  if (copy == NULL) {
+    displayinfo ( str, 1*8, 2*8, color ) ;
+  }
+  else {
+    strcpy(copy, str);
+    // Truncate the string so it does not overflow on to the station name
+    if (strlen(copy) > 42) copy[42] = '\0';
+    // The string consists of artist name '\n' song name. If either name is
+    // longer than 21 characters, change the newline to a slash.
+    if (char *newline = strchr(copy, '\n')) {
+      if (((newline - copy) > 21) || (strlen(newline+1) > 21)) {
+        *newline = '/';
+      }
+    }
+    displayinfo ( copy, 1*8, 2*8, color ) ;
+    free(copy);
+  }
+#endif
+}
+
+void displayStation ( const char* str, uint16_t color )
+{
+#if defined ( USETFT )
+  displayinfo ( str, 60, 68, color ) ;
+#elif defined ( USEFEATHEROLED )
+  // Use line 3
+  displayinfo ( str, 3*8, 8, color ) ;
+#endif
+}
 
 //******************************************************************************************
 //                        S H O W S T R E A M T I T L E                                    *
@@ -1207,7 +1305,7 @@ void showstreamtitle ( const char *ml, bool full )
     }
     strcpy ( p1, p2 ) ;                         // Shift 2nd part of title 2 or 3 places
   }
-  displayinfo ( streamtitle, 20, 40, CYAN ) ;   // Show title at position 20
+  displaySong ( streamtitle, CYAN ) ;           // Show title
 }
 
 
@@ -1245,7 +1343,7 @@ bool connecttohost()
 
   stop_mp3client() ;                                // Disconnect if still connected
   dbgprint ( "Connect to new host %s", host.c_str() ) ;
-  displayinfo ( "   ** Internet radio **", 0, 20, WHITE ) ;
+  displayTitle ( "   ** Internet radio **", WHITE ) ;
   datamode = INIT ;                                 // Start default in metamode
   chunked = false ;                                 // Assume not chunked
   if ( host.endsWith ( ".m3u" ) )                   // Is it an m3u playlist?
@@ -1274,7 +1372,7 @@ bool connecttohost()
   }
   pfs = dbgprint ( "Connect to %s on port %d, extension %s",
                    hostwoext.c_str(), port, extension.c_str() ) ;
-  displayinfo ( pfs, 60, 68, YELLOW ) ;             // Show info at position 60
+  displayStation ( pfs, YELLOW ) ;                  // Show info
   if ( mp3client.connect ( hostwoext.c_str(), port ) )
   {
     dbgprint ( "Connected to server" ) ;
@@ -1304,7 +1402,7 @@ bool connecttofile()
   String path ;                                           // Full file spec
   char*  p ;                                              // Pointer to filename
 
-  displayinfo ( "   **** MP3 Player ****", 0, 20, WHITE ) ;
+  displayTitle ( "   **** MP3 Player ****", WHITE ) ;
   path = host.substring ( 9 ) ;                           // Path, skip the "localhost" part
   mp3file = SPIFFS.open ( path, "r" ) ;                   // Open the file
   if ( !mp3file )
@@ -1314,8 +1412,7 @@ bool connecttofile()
   }
   p = (char*)path.c_str() + 1 ;                           // Point to filename
   showstreamtitle ( p, true ) ;                           // Show the filename as title
-  displayinfo ( "Playing from local file",
-                60, 68, YELLOW ) ;                        // Show Source at position 60
+  displayStation ( "Playing from local file", YELLOW ) ;  // Show Source
   icyname = "" ;                                          // No icy name yet
   chunked = false ;                                       // File not chunked
   return true ;
@@ -1347,8 +1444,9 @@ bool connectwifi()
   }
   pfs = dbgprint ( "IP = %d.%d.%d.%d",
                    WiFi.localIP()[0], WiFi.localIP()[1], WiFi.localIP()[2], WiFi.localIP()[3] ) ;
-#if defined ( USETFT )
-  tft.println ( pfs ) ;
+#if defined ( USETFT ) || defined ( USEFEATHEROLED )
+  displayTitle ( pfs, WHITE );
+  delay(1000);
 #endif
   return true ;
 }
@@ -1769,21 +1867,35 @@ void setup()
   pinMode ( BUTTON2, INPUT_PULLUP ) ;                  // Input for control button 2
 #endif
   vs1053player.begin() ;                               // Initialize VS1053 player
-# if defined ( USETFT )
-  tft.begin() ;                                        // Init TFT interface
-  tft.fillRect ( 0, 0, 160, 128, BLACK ) ;             // Clear screen does not work when rotated
-  tft.setRotation ( 3 ) ;                              // Use landscape format
-  tft.clearScreen() ;                                  // Clear screen
-  tft.setTextSize ( 1 ) ;                              // Small character font
-  tft.setTextColor ( WHITE ) ;                         // Info in white
-  tft.println ( "Starting" ) ;
-  tft.println ( "Version:" ) ;
-  tft.println ( VERSION ) ;
+#if defined ( USETFT ) || defined ( USEFEATHEROLED )
+#if defined ( USETFT )
+  display.begin() ;                                        // Init display interface
+  display.fillRect ( 0, 0, 160, 128, BLACK ) ;             // Clear screen does not work when rotated
+  display.setRotation ( 3 ) ;                              // Use landscape format
+  display.clearScreen() ;                                  // Clear screen
+#elif defined ( USEFEATHEROLED )
+  // by default, we'll generate the high voltage from the 3.3v line internally! (neat!)
+  display.begin(SSD1306_SWITCHCAPVCC, 0x3C);  // initialize with the I2C addr 0x3C (for the 128x32)
+  display.clearDisplay();
+  display.display();
+  display.setCursor(0,0);
+#endif
+  display.setTextSize ( 1 ) ;                              // Small character font
+  display.setTextColor ( WHITE ) ;                         // Info in white
+  display.println ( "Starting" ) ;
+  display.println ( "Version:" ) ;
+  display.println ( VERSION ) ;
+  display.display();
 #else
 #if defined(USEBUTTONS)
   pinMode ( BUTTON1, INPUT_PULLUP ) ;                  // Input for control button 1
   pinMode ( BUTTON3, INPUT_PULLUP ) ;                  // Input for control button 3
 #endif
+#endif
+#if defined( USEBUTTONS )
+  pinMode ( VOLUME_UP, INPUT_PULLUP ) ;                // Input for control button A
+  pinMode ( VOLUME_DOWN, INPUT_PULLUP ) ;              // Input for control button B
+  pinMode ( PRESET_NEXT, INPUT_PULLUP ) ;              // Input for control button C
 #endif
   delay(10);
   analogrest = ( analogRead ( A0 ) + asw1 ) / 2  ;     // Assumed inactive analog input
@@ -2059,7 +2171,10 @@ void loop()
     emptyring() ;                                      // Empty the ringbuffer
     datamode = STOPPED ;                               // Yes, state becomes STOPPED
 #if defined ( USETFT )
-    tft.fillRect ( 0, 0, 160, 128, BLACK ) ;           // Clear screen does not work when rotated
+    display.fillRect ( 0, 0, 160, 128, BLACK ) ;           // Clear screen does not work when rotated
+#elif defined ( USEFEATHEROLED )
+    display.clearDisplay();
+    display.display();
 #endif
     delay ( 500 ) ;
   }
@@ -2339,8 +2454,7 @@ void handlebyte ( uint8_t b, bool force )
         {
           icyname = metaline.substring(9) ;            // Get station name
           icyname.trim() ;                             // Remove leading and trailing spaces
-          displayinfo ( icyname.c_str(), 60, 68,
-                        YELLOW ) ;                     // Show station name at position 60
+          displayStation ( icyname.c_str(), YELLOW ) ; // Show station name
         }
         else if ( metaline.startsWith ( "Transfer-Encoding:" ) )
         {
